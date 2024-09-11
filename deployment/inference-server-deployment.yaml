@@ -1,0 +1,141 @@
+---
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: inference-server-deployment
+  annotations:
+    description: "Deploy model server using the trained model"
+    iconClass: "icon-redhat"
+    tags: "OpenShift AI"
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: aws-connection-${INFERENCE_SERVER_NAME}
+    annotations:
+      openshift.io/display-name: ${INFERENCE_SERVER_NAME}
+      opendatahub.io/connection-type: s3
+    labels:
+      opendatahub.io/dashboard: 'true'
+      opendatahub.io/managed: 'true'
+  stringData:
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+
+- apiVersion: serving.kserve.io/v1alpha1
+  kind: ServingRuntime
+  metadata:
+    annotations:
+      opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+      openshift.io/display-name: ${INFERENCE_SERVER_NAME}
+      opendatahub.io/apiProtocol: REST
+      opendatahub.io/template-name: kserve-ovms
+      opendatahub.io/template-display-name: OpenVINO Model Server
+      opendatahub.io/accelerator-name: ''
+    labels:
+      opendatahub.io/dashboard: 'true'
+    name: ${INFERENCE_SERVER_NAME}
+  spec:
+    annotations:
+      prometheus.io/path: "/metrics"
+      prometheus.io/port: '8888'
+    containers:
+    - args:
+      - "--model_name={{.Name}}"
+      - "--port=8001"
+      - "--rest_port=8888"
+      - "--model_path=/mnt/models"
+      - "--file_system_poll_wait_seconds=0"
+      - "--grpc_bind_address=0.0.0.0"
+      - "--rest_bind_address=0.0.0.0"
+      - "--target_device=AUTO"
+      - "--metrics_enable"
+      image: quay.io/modh/openvino_model_server@sha256:9ccb29967f39b5003cf395cc686a443d288869578db15d0d37ed8ebbeba19375
+      name: kserve-container
+      ports:
+      - containerPort: 8888
+        protocol: TCP
+      affinity: {}
+      volumeMounts:
+      - name: shm
+        mountPath: "/dev/shm"
+    multiModel: false
+    protocolVersions:
+    - v2
+    - grpc-v2
+    supportedModelFormats:
+    - autoSelect: true
+      name: openvino_ir
+      version: opset13
+    - name: onnx
+      version: '1'
+    - autoSelect: true
+      name: tensorflow
+      version: '1'
+    - autoSelect: true
+      name: tensorflow
+      version: '2'
+    - autoSelect: true
+      name: paddle
+      version: '2'
+    - autoSelect: true
+      name: pytorch
+      version: '2'
+    volumes:
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
+- apiVersion: serving.kserve.io/v1beta1
+  kind: InferenceService
+  metadata:
+    name: ${INFERENCE_SERVER_NAME}
+    labels:
+      opendatahub.io/dashboard: 'true'
+    annotations:
+      openshift.io/display-name: ${INFERENCE_SERVER_NAME}
+      serving.knative.openshift.io/enablePassthrough: 'true'
+      sidecar.istio.io/inject: 'true'
+      sidecar.istio.io/rewriteAppHTTPProbers: 'true'
+  spec:
+    predictor:
+      minReplicas: 1
+      maxReplicas: 1
+      model:
+        modelFormat:
+          name: onnx
+          version: '1'
+        runtime: ${INFERENCE_SERVER_NAME}
+        storage:
+          key: aws-connection-${INFERENCE_SERVER_NAME}
+          path: models
+        resources:
+          limits:
+            cpu: '2'
+            memory: 8Gi
+          requests:
+            cpu: '1'
+            memory: 4Gi
+parameters:
+- description: Name of the Model Server
+  name: INFERENCE_SERVER_NAME
+  required: true
+- description: AWS access ID
+  name: AWS_ACCESS_KEY_ID
+  required: true
+- description: AWS secret access key
+  name: AWS_SECRET_ACCESS_KEY
+  required: true
+- description: AWS S3 endpoint
+  name: AWS_S3_ENDPOINT
+  required: true
+- description: AWS Default Region
+  name: AWS_DEFAULT_REGION
+  required: true
+- description: S3 Bucket name
+  name: AWS_S3_BUCKET
+  required: true
+

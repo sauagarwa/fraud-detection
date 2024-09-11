@@ -5,6 +5,7 @@ from kfp import dsl
 from kfp.dsl import InputPath, OutputPath
 
 from kfp import kubernetes
+from typing import Optional
 
 
 @dsl.component(base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301")
@@ -140,6 +141,17 @@ def upload_model(input_model_path: InputPath()):
     bucket.upload_file(input_model_path, s3_key)
 
 
+@dsl.container_component
+def deploy_model():
+    return dsl.ContainerSpec(
+        "quay.io/redhat-ai-dev/utils:latest",
+        ["/bin/sh", "-c"],
+        [
+            f"oc get pods"
+        ],
+    )
+
+
 @dsl.pipeline(name=os.path.basename(__file__).replace('.py', ''))
 def pipeline():
     get_data_task = get_data()
@@ -151,6 +163,8 @@ def pipeline():
     upload_model_task = upload_model(input_model_path=onnx_file)
 
     upload_model_task.set_env_variable(name="S3_KEY", value="models/fraud/1/model.onnx")
+
+    deploy_model()
 
     kubernetes.use_secret_as_env(
         task=upload_model_task,
