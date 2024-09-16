@@ -147,7 +147,16 @@ def deploy_model():
         "quay.io/redhat-ai-dev/utils:latest",
         ["/bin/sh", "-c"],
         [
-            f"oc get pods"
+            """oc delete secret aws-connection-fraud-detection-is || true && 
+            oc delete servingruntimes fraud-detection-is || true && 
+            oc delete inferenceservices fraud-detection-is || true && 
+            oc process -f https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/inference-server-deployment.yaml \
+            -p INFERENCE_SERVER_NAME=fraud-detection-is \
+            -p AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+            -p AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+            -p AWS_S3_ENDPOINT=${AWS_S3_ENDPOINT} \
+            -p AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+            -p AWS_S3_BUCKET=${AWS_S3_BUCKET} | oc create -f -"""
         ],
     )
 
@@ -161,11 +170,7 @@ def pipeline():
     onnx_file = train_model_task.outputs["model_output_path"]
 
     upload_model_task = upload_model(input_model_path=onnx_file)
-
     upload_model_task.set_env_variable(name="S3_KEY", value="models/fraud/1/model.onnx")
-
-    deploy_model()
-
     kubernetes.use_secret_as_env(
         task=upload_model_task,
         secret_name='aws-connection-my-storage',
@@ -175,7 +180,21 @@ def pipeline():
             'AWS_DEFAULT_REGION': 'AWS_DEFAULT_REGION',
             'AWS_S3_BUCKET': 'AWS_S3_BUCKET',
             'AWS_S3_ENDPOINT': 'AWS_S3_ENDPOINT',
-        })
+    })
+
+    deploy_model_task = deploy_model().after(upload_model_task)
+    kubernetes.use_secret_as_env(
+        task=deploy_model_task,
+        secret_name='aws-connection-my-storage',
+        secret_key_to_env={
+            'AWS_ACCESS_KEY_ID': 'AWS_ACCESS_KEY_ID',
+            'AWS_SECRET_ACCESS_KEY': 'AWS_SECRET_ACCESS_KEY',
+            'AWS_DEFAULT_REGION': 'AWS_DEFAULT_REGION',
+            'AWS_S3_BUCKET': 'AWS_S3_BUCKET',
+            'AWS_S3_ENDPOINT': 'AWS_S3_ENDPOINT',
+    })
+
+   
 
 if __name__ == '__main__':
     compiler.Compiler().compile(
