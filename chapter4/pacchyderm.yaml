@@ -1,0 +1,33 @@
+apiVersion: aiml.pachyderm.com/v1beta1
+kind: Pachyderm
+metadata:
+  name: pachyderm-sample
+  namespace: pachyderm
+spec:
+  console: {}
+  etcd:
+    storageSize: 10Gi
+  pachd:
+    logLevel: info
+    metrics: {}
+    postgresql:
+      database: pachyderm
+      host: postgres
+      port: 5432
+      ssl: disable
+      user: pachyderm
+    ppsWorkerGRPCPort: 1080
+    storage:
+      backend: MINIO
+      minio:
+        bucket: pachyderm
+        endpoint: 'minio-ml-workshop.minio.svc.cluster.local:9000'
+        id: minio
+        secret: minio
+        secure: 'false'
+      putFileConcurrencyLimit: 100
+      uploadFileConcurrencyLimit: 100
+  postgresql:
+  version: v2.1.6
+  worker:
+    serviceAccountName: pachyderm-worker

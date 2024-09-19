@@ -1,6 +1,8 @@
 # PIPELINE DEFINITION
 # Name: 7-get-data-train-upload
 components:
+  comp-deploy-model:
+    executorLabel: exec-deploy-model
   comp-get-data:
     executorLabel: exec-get-data
     outputDefinitions:
@@ -33,6 +35,21 @@ components:
             schemaVersion: 0.0.1
 deploymentSpec:
   executors:
+    exec-deploy-model:
+      container:
+        args:
+        - "oc delete secret aws-connection-fraud-detection-is || true && \n      \
+          \      oc delete servingruntimes fraud-detection-is || true && \n      \
+          \      oc delete inferenceservices fraud-detection-is || true && \n    \
+          \        oc process -f https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/inference-server-deployment.yaml\
+          \             -p INFERENCE_SERVER_NAME=fraud-detection-is             -p\
+          \ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}             -p AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}\
+          \             -p AWS_S3_ENDPOINT=${AWS_S3_ENDPOINT}             -p AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}\
+          \             -p AWS_S3_BUCKET=${AWS_S3_BUCKET} | oc create -f -"
+        command:
+        - /bin/sh
+        - -c
+        image: quay.io/redhat-ai-dev/utils:latest
     exec-get-data:
       container:
         args:
@@ -45,7 +62,7 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
         - sh
@@ -76,7 +93,7 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'tf2onnx' 'seaborn'\
           \ && \"$0\" \"$@\"\n"
@@ -160,7 +177,7 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.5.0'\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
           \  python3 -m pip install --quiet --no-warn-script-location 'boto3' 'botocore'\
           \ && \"$0\" \"$@\"\n"
@@ -195,6 +212,15 @@ pipelineInfo:
 root:
   dag:
     tasks:
+      deploy-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-deploy-model
+        dependentTasks:
+        - upload-model
+        taskInfo:
+          name: deploy-model
       get-data:
         cachingOptions:
           enableCache: true
@@ -233,12 +259,26 @@ root:
         taskInfo:
           name: upload-model
 schemaVersion: 2.1.0
-sdkVersion: kfp-2.5.0
+sdkVersion: kfp-2.9.0
 ---
 platforms:
   kubernetes:
     deploymentSpec:
       executors:
+        exec-deploy-model:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            - envVar: AWS_S3_BUCKET
+              secretKey: AWS_S3_BUCKET
+            - envVar: AWS_S3_ENDPOINT
+              secretKey: AWS_S3_ENDPOINT
+            secretName: aws-connection-my-storage
         exec-upload-model:
           secretAsEnv:
           - keyToEnv:
