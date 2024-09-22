@@ -1,0 +1,30 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: fraud-{{ model_version }}
+  labels:
+    opendatahub.io/dashboard: 'true'
+  annotations:
+    openshift.io/display-name: fraud-{{ model_version }}
+    serving.knative.openshift.io/enablePassthrough: 'true'
+    sidecar.istio.io/inject: 'true'
+    sidecar.istio.io/rewriteAppHTTPProbers: 'true'
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    model:
+      modelFormat:
+        name: onnx
+        version: '1'
+      runtime: fraud-{{ model_version }}
+      storage:
+        key: {{ storage_key }}
+        path: model-{{ model_version }}/fraud
+      resources:
+        limits:
+          cpu: '2'
+          memory: 8Gi
+        requests:
+          cpu: '1'
+          memory: 4Gi

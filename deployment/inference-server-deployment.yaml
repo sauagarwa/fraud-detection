@@ -8,23 +8,6 @@ metadata:
     iconClass: "icon-redhat"
     tags: "OpenShift AI"
 objects:
-- apiVersion: v1
-  kind: Secret
-  metadata:
-    name: aws-connection-${INFERENCE_SERVER_NAME}
-    annotations:
-      openshift.io/display-name: ${INFERENCE_SERVER_NAME}
-      opendatahub.io/connection-type: s3
-    labels:
-      opendatahub.io/dashboard: 'true'
-      opendatahub.io/managed: 'true'
-  stringData:
-    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
-    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-    AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
-    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
-    AWS_S3_BUCKET: ${AWS_S3_BUCKET}
-
 - apiVersion: serving.kserve.io/v1alpha1
   kind: ServingRuntime
   metadata:

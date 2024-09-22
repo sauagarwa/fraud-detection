@@ -19,7 +19,7 @@
               ],
               "include_subdirectories": true,
               "outputs": [
-                "models/fraud/1/model.onnx"
+                "models/model.onnx"
               ],
               "env_vars": [],
               "kubernetes_pod_annotations": [],
@@ -28,14 +28,15 @@
               "kubernetes_shared_mem_size": {},
               "kubernetes_tolerations": [],
               "mounted_volumes": [],
-              "filename": "1_experiment_train.ipynb"
+              "filename": "1_experiment_train.ipynb",
+              "runtime_image": "quay.io/modh/runtime-images@sha256:90e394f5a379c24176b1efee6c84b83866314cafd539a66cd58544f24def84f9"
             },
             "label": "",
             "ui_data": {
               "label": "1_experiment_train.ipynb",
-              "image": "/notebook/fraud-detection-w-modelmesh/tensorflow-workbench/static/elyra/notebook.svg",
+              "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
               "x_pos": 88,
-              "y_pos": 275,
+              "y_pos": 273,
               "description": "Run notebook file"
             }
           },
@@ -76,34 +77,36 @@
             "component_parameters": {
               "dependencies": [],
               "include_subdirectories": false,
-              "outputs": [],
+              "outputs": [
+                "vars.txt"
+              ],
               "env_vars": [],
               "kubernetes_pod_annotations": [],
               "kubernetes_pod_labels": [],
               "kubernetes_secrets": [
                 {
                   "env_var": "AWS_ACCESS_KEY_ID",
-                  "name": "aws-connection-my-storage",
+                  "name": "aws-connection-fraud-detection",
                   "key": "AWS_ACCESS_KEY_ID"
                 },
                 {
                   "env_var": "AWS_SECRET_ACCESS_KEY",
-                  "name": "aws-connection-my-storage",
+                  "name": "aws-connection-fraud-detection",
                   "key": "AWS_SECRET_ACCESS_KEY"
                 },
                 {
                   "env_var": "AWS_S3_ENDPOINT",
-                  "name": "aws-connection-my-storage",
+                  "name": "aws-connection-fraud-detection",
                   "key": "AWS_S3_ENDPOINT"
                 },
                 {
                   "env_var": "AWS_DEFAULT_REGION",
-                  "name": "aws-connection-my-storage",
+                  "name": "aws-connection-fraud-detection",
                   "key": "AWS_DEFAULT_REGION"
                 },
                 {
                   "env_var": "AWS_S3_BUCKET",
-                  "name": "aws-connection-my-storage",
+                  "name": "aws-connection-fraud-detection",
                   "key": "AWS_S3_BUCKET"
                 }
               ],
@@ -115,9 +118,9 @@
             "label": "",
             "ui_data": {
               "label": "2_save_model.ipynb",
-              "image": "/notebook/fraud-detection-w-modelmesh/tensorflow-workbench/static/elyra/notebook.svg",
-              "x_pos": 342,
-              "y_pos": 277,
+              "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
+              "x_pos": 354,
+              "y_pos": 272,
               "description": "Run notebook file"
             }
           },
@@ -168,14 +171,14 @@
           "name": "6 Train Save",
           "runtime": "Data Science Pipelines",
           "pipeline_defaults": {
-            "kubernetes_tolerations": [],
-            "mounted_volumes": [],
-            "kubernetes_pod_annotations": [],
-            "kubernetes_pod_labels": [],
             "kubernetes_shared_mem_size": {},
+            "kubernetes_pod_labels": [],
+            "kubernetes_tolerations": [],
+            "kubernetes_pod_annotations": [],
+            "mounted_volumes": [],
             "env_vars": [],
             "kubernetes_secrets": [],
-            "runtime_image": "quay.io/modh/runtime-images@sha256:ba76fd74b7595329a23f710485a7701caa0a7b495e60c89a23d5338ca13cf2e2"
+            "runtime_image": "quay.io/modh/runtime-images@sha256:1711dfaeb5fea393ebe09dc957fcf36720ff2859c3afc47fe4e2110b68bc918f"
           },
           "pipeline_parameters": []
         }
