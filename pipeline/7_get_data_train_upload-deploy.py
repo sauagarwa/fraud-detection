@@ -9,10 +9,21 @@ from typing import Optional
 
 
 @dsl.component(base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301")
-def get_data(data_output_path: OutputPath()):
+def get_data(data_version: str,
+             bucket_name: str,
+             data_output_path: OutputPath()):
     import urllib.request
+    import os
+
+    endpoint_url = os.environ.get('AWS_S3_ENDPOINT')
+
+    print("data version = " + data_version)
+    print("endpoint url = " + endpoint_url)
+    print("bucket = " + bucket_name)
+
+    url = f"{endpoint_url}/{bucket_name}/{data_version}/card_transdata.csv"
+
     print("starting download...")
-    url = "https://raw.githubusercontent.com/rh-aiservices-bu/fraud-detection/main/data/card_transdata.csv"
     urllib.request.urlretrieve(url, data_output_path)
     print("done")
 
@@ -113,10 +124,13 @@ def train_model(data_input_path: InputPath(), model_output_path: OutputPath()):
     base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301",
     packages_to_install=["boto3", "botocore"]
 )
-def upload_model(input_model_path: InputPath()):
+def upload_model(input_model_path: InputPath(), version_file_output_path: OutputPath()):
+
+    # Save the model as ONNX for easy use of ModelMesh
     import os
     import boto3
     import botocore
+    from datetime import datetime
 
     aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
     aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
@@ -124,77 +138,132 @@ def upload_model(input_model_path: InputPath()):
     region_name = os.environ.get('AWS_DEFAULT_REGION')
     bucket_name = os.environ.get('AWS_S3_BUCKET')
 
-    s3_key = os.environ.get("S3_KEY")
+    model_version = datetime.now().strftime("%y-%m-%d-%H%M%S")
+    print("model version = " + model_version)
 
-    session = boto3.session.Session(aws_access_key_id=aws_access_key_id,
-                                    aws_secret_access_key=aws_secret_access_key)
+    object_name = 'model-' + model_version +'/fraud/1/model.onnx'
+    print("object name = " + object_name)
 
-    s3_resource = session.resource(
-        's3',
-        config=botocore.client.Config(signature_version='s3v4'),
-        endpoint_url=endpoint_url,
-        region_name=region_name)
-
-    bucket = s3_resource.Bucket(bucket_name)
-
-    print(f"Uploading {s3_key}")
-    bucket.upload_file(input_model_path, s3_key)
+    # Set up the S3 client
+    s3 = boto3.client('s3',
+                      endpoint_url=endpoint_url,
+                      aws_access_key_id=aws_access_key_id,
+                      aws_secret_access_key=aws_secret_access_key)
 
 
-@dsl.container_component
-def deploy_model():
-    return dsl.ContainerSpec(
-        "quay.io/redhat-ai-dev/utils:latest",
-        ["/bin/sh", "-c"],
-        [
-            """oc delete secret aws-connection-fraud-detection-is || true && 
-            oc delete servingruntimes fraud-detection-is || true && 
-            oc delete inferenceservices fraud-detection-is || true && 
-            oc process -f https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/inference-server-deployment.yaml \
-            -p INFERENCE_SERVER_NAME=fraud-detection-is \
-            -p AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
-            -p AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
-            -p AWS_S3_ENDPOINT=${AWS_S3_ENDPOINT} \
-            -p AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
-            -p AWS_S3_BUCKET=${AWS_S3_BUCKET} | oc create -f -"""
-        ],
-    )
+    # upload the model to the registry
+    s3.upload_file(input_model_path, bucket_name, object_name)
+
+    print("version output path = " + version_file_output_path)
+    # store the model version in a file temporarily for the next pipeline job
+    with open(version_file_output_path, "w") as text_file:
+        text_file.write('model_version='+model_version)
+
+
+# @dsl.container_component
+# def deploy_model():
+#     return dsl.ContainerSpec(
+#         "quay.io/redhat-ai-dev/utils:latest",
+#         ["/bin/sh", "-c"],
+#         [
+#             """oc delete secret aws-connection-fraud-detection-is || true && 
+#             oc delete servingruntimes fraud-detection-is || true && 
+#             oc delete inferenceservices fraud-detection-is || true && 
+#             oc process -f https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/inference-server-deployment.yaml \
+#             -p INFERENCE_SERVER_NAME=fraud-detection-is \
+#             -p AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+#             -p AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+#             -p AWS_S3_ENDPOINT=${AWS_S3_ENDPOINT} \
+#             -p AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION} \
+#             -p AWS_S3_BUCKET=${AWS_S3_BUCKET} | oc create -f -"""
+#         ],
+#     )
+
+@dsl.component(base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301")
+def deploy_model(data_connection_name: str,
+                 input_version_file_path: InputPath()):
+    import os, time, subprocess
+    from jinja2 import Template
+    import urllib.request
+    import os
+
+    variables = {}
+    with open(input_version_file_path) as myfile:
+        for line in myfile:
+            name, var = line.partition("=")[::2]
+            variables[name.strip()] = str(var)
+
+    template_data = {"model_version": variables['model_version'], "storage_key": data_connection_name}
+
+    def download_file(dir, filename):
+        url = f"https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/{filename}"
+
+        print("starting download...")
+        urllib.request.urlretrieve(url, f"{dir}/{filename}")
+        print("done")
+
+        pass
+
+    def deploy_template(filename, template_data):
+        print("invoking template:" + filename)
+        template = Template(open(filename).read())
+        rendered_template = template.render(template_data)
+        
+        subprocess.run(['oc', 'whoami'])
+        ps = subprocess.Popen(['echo', rendered_template], stdout=subprocess.PIPE)
+        print(ps.stdout)
+        output = subprocess.check_output(['oc', 'apply', '-f', '-'], stdin=ps.stdout)
+        ps.wait()
+        print(f"Deployed template {filename}. Version: {variables['model_version']}")
+        
+    templates = ['serving-runtime.yaml',
+                 'inference-service.yaml']
+    for t in templates:
+        dir =  "/tmp"
+        download_file(dir,t)
+        deploy_template(f"{dir}/{t}", template_data)
 
 
 @dsl.pipeline(name=os.path.basename(__file__).replace('.py', ''))
-def pipeline():
-    get_data_task = get_data()
+def pipeline(data_version: str = '1',
+             bucket_name: str = 'raw-data'):
+    
+    secret_key_to_env={
+            'AWS_ACCESS_KEY_ID': 'AWS_ACCESS_KEY_ID',
+            'AWS_SECRET_ACCESS_KEY': 'AWS_SECRET_ACCESS_KEY',
+            'AWS_DEFAULT_REGION': 'AWS_DEFAULT_REGION',
+            'AWS_S3_BUCKET': 'AWS_S3_BUCKET',
+            'AWS_S3_ENDPOINT': 'AWS_S3_ENDPOINT',
+    }
+    get_data_task = get_data(data_version=data_version, bucket_name=bucket_name)
+    get_data_task.set_caching_options(False)
+    kubernetes.use_secret_as_env(
+        task=get_data_task,
+        secret_name="aws-connection-fraud-detection",
+        secret_key_to_env=secret_key_to_env)
     csv_file = get_data_task.outputs["data_output_path"]
     # csv_file = get_data_task.output
     train_model_task = train_model(data_input_path=csv_file)
+    train_model_task.set_caching_options(False)
     onnx_file = train_model_task.outputs["model_output_path"]
 
     upload_model_task = upload_model(input_model_path=onnx_file)
-    upload_model_task.set_env_variable(name="S3_KEY", value="models/fraud/1/model.onnx")
+    upload_model_task.set_caching_options(False)
+    #upload_model_task.set_env_variable(name="S3_KEY", value="models/fraud/1/model.onnx")
     kubernetes.use_secret_as_env(
         task=upload_model_task,
-        secret_name='aws-connection-my-storage',
-        secret_key_to_env={
-            'AWS_ACCESS_KEY_ID': 'AWS_ACCESS_KEY_ID',
-            'AWS_SECRET_ACCESS_KEY': 'AWS_SECRET_ACCESS_KEY',
-            'AWS_DEFAULT_REGION': 'AWS_DEFAULT_REGION',
-            'AWS_S3_BUCKET': 'AWS_S3_BUCKET',
-            'AWS_S3_ENDPOINT': 'AWS_S3_ENDPOINT',
-    })
+        secret_name="aws-connection-fraud-detection",
+        secret_key_to_env=secret_key_to_env)
+    version_file = upload_model_task.outputs["version_file_output_path"]
 
-    deploy_model_task = deploy_model().after(upload_model_task)
+    deploy_model_task = deploy_model(data_connection_name="aws-connection-fraud-detection",
+                                     input_version_file_path=version_file).after(upload_model_task)
+    deploy_model_task.set_caching_options(False)
     kubernetes.use_secret_as_env(
         task=deploy_model_task,
-        secret_name='aws-connection-my-storage',
-        secret_key_to_env={
-            'AWS_ACCESS_KEY_ID': 'AWS_ACCESS_KEY_ID',
-            'AWS_SECRET_ACCESS_KEY': 'AWS_SECRET_ACCESS_KEY',
-            'AWS_DEFAULT_REGION': 'AWS_DEFAULT_REGION',
-            'AWS_S3_BUCKET': 'AWS_S3_BUCKET',
-            'AWS_S3_ENDPOINT': 'AWS_S3_ENDPOINT',
-    })
+        secret_name="aws-connection-fraud-detection",
+        secret_key_to_env=secret_key_to_env)
 
-   
 
 if __name__ == '__main__':
     compiler.Compiler().compile(

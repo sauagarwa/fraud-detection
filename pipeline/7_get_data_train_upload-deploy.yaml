@@ -1,10 +1,28 @@
 # PIPELINE DEFINITION
-# Name: 7-get-data-train-upload
+# Name: 7-get-data-train-upload-deploy-versioned-data
+# Inputs:
+#    bucket_name: str [Default: 'raw-data']
+#    data_version: str [Default: '1']
 components:
   comp-deploy-model:
     executorLabel: exec-deploy-model
+    inputDefinitions:
+      artifacts:
+        input_version_file_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+      parameters:
+        data_connection_name:
+          parameterType: STRING
   comp-get-data:
     executorLabel: exec-get-data
+    inputDefinitions:
+      parameters:
+        bucket_name:
+          parameterType: STRING
+        data_version:
+          parameterType: STRING
     outputDefinitions:
       artifacts:
         data_output_path:
@@ -33,23 +51,61 @@ components:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        version_file_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
 deploymentSpec:
   executors:
     exec-deploy-model:
       container:
         args:
-        - "oc delete secret aws-connection-fraud-detection-is || true && \n      \
-          \      oc delete servingruntimes fraud-detection-is || true && \n      \
-          \      oc delete inferenceservices fraud-detection-is || true && \n    \
-          \        oc process -f https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/inference-server-deployment.yaml\
-          \             -p INFERENCE_SERVER_NAME=fraud-detection-is             -p\
-          \ AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}             -p AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}\
-          \             -p AWS_S3_ENDPOINT=${AWS_S3_ENDPOINT}             -p AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}\
-          \             -p AWS_S3_BUCKET=${AWS_S3_BUCKET} | oc create -f -"
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - deploy_model
         command:
-        - /bin/sh
+        - sh
         - -c
-        image: quay.io/redhat-ai-dev/utils:latest
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef deploy_model(data_connection_name: str,\n                 input_version_file_path:\
+          \ InputPath()):\n    import os, time, subprocess\n    from jinja2 import\
+          \ Template\n    import urllib.request\n    import os\n\n    variables =\
+          \ {}\n    with open(input_version_file_path) as myfile:\n        for line\
+          \ in myfile:\n            name, var = line.partition(\"=\")[::2]\n     \
+          \       variables[name.strip()] = str(var)\n\n    template_data = {\"model_version\"\
+          : variables['model_version'], \"storage_key\": data_connection_name}\n\n\
+          \    def download_file(dir, filename):\n        url = f\"https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/{filename}\"\
+          \n\n        print(\"starting download...\")\n        urllib.request.urlretrieve(url,\
+          \ f\"{dir}/{filename}\")\n        print(\"done\")\n\n        pass\n\n  \
+          \  def deploy_template(filename, template_data):\n        print(\"invoking\
+          \ template:\" + filename)\n        template = Template(open(filename).read())\n\
+          \        rendered_template = template.render(template_data)\n\n        subprocess.run(['oc',\
+          \ 'whoami'])\n        ps = subprocess.Popen(['echo', rendered_template],\
+          \ stdout=subprocess.PIPE)\n        print(ps.stdout)\n        output = subprocess.check_output(['oc',\
+          \ 'apply', '-f', '-'], stdin=ps.stdout)\n        ps.wait()\n        print(f\"\
+          Deployed template {filename}. Version: {variables['model_version']}\")\n\
+          \n    templates = ['serving-runtime.yaml',\n                 'inference-service.yaml']\n\
+          \    for t in templates:\n        dir =  \"/tmp\"\n        download_file(dir,t)\n\
+          \        deploy_template(f\"{dir}/{t}\", template_data)\n\n"
+        image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
     exec-get-data:
       container:
         args:
@@ -76,10 +132,14 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef get_data(data_output_path: OutputPath()):\n    import urllib.request\n\
-          \    print(\"starting download...\")\n    url = \"https://raw.githubusercontent.com/rh-aiservices-bu/fraud-detection/main/data/card_transdata.csv\"\
-          \n    urllib.request.urlretrieve(url, data_output_path)\n    print(\"done\"\
-          )\n\n"
+          \ *\n\ndef get_data(data_version: str,\n             bucket_name: str,\n\
+          \             data_output_path: OutputPath()):\n    import urllib.request\n\
+          \    import os\n\n    endpoint_url = os.environ.get('AWS_S3_ENDPOINT')\n\
+          \n    print(\"data version = \" + data_version)\n    print(\"endpoint url\
+          \ = \" + endpoint_url)\n    print(\"bucket = \" + bucket_name)\n\n    url\
+          \ = f\"{endpoint_url}/{bucket_name}/{data_version}/card_transdata.csv\"\n\
+          \n    print(\"starting download...\")\n    urllib.request.urlretrieve(url,\
+          \ data_output_path)\n    print(\"done\")\n\n"
         image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
     exec-train-model:
       container:
@@ -192,45 +252,62 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef upload_model(input_model_path: InputPath()):\n    import os\n\
-          \    import boto3\n    import botocore\n\n    aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')\n\
+          \ *\n\ndef upload_model(input_model_path: InputPath(), version_file_output_path:\
+          \ OutputPath()):\n\n    # Save the model as ONNX for easy use of ModelMesh\n\
+          \    import os\n    import boto3\n    import botocore\n    from datetime\
+          \ import datetime\n\n    aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')\n\
           \    aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')\n \
           \   endpoint_url = os.environ.get('AWS_S3_ENDPOINT')\n    region_name =\
           \ os.environ.get('AWS_DEFAULT_REGION')\n    bucket_name = os.environ.get('AWS_S3_BUCKET')\n\
-          \n    s3_key = os.environ.get(\"S3_KEY\")\n\n    session = boto3.session.Session(aws_access_key_id=aws_access_key_id,\n\
-          \                                    aws_secret_access_key=aws_secret_access_key)\n\
-          \n    s3_resource = session.resource(\n        's3',\n        config=botocore.client.Config(signature_version='s3v4'),\n\
-          \        endpoint_url=endpoint_url,\n        region_name=region_name)\n\n\
-          \    bucket = s3_resource.Bucket(bucket_name)\n\n    print(f\"Uploading\
-          \ {s3_key}\")\n    bucket.upload_file(input_model_path, s3_key)\n\n"
-        env:
-        - name: S3_KEY
-          value: models/fraud/1/model.onnx
+          \n    model_version = datetime.now().strftime(\"%y-%m-%d-%H%M%S\")\n   \
+          \ print(\"model version = \" + model_version)\n\n    object_name = 'model-'\
+          \ + model_version +'/fraud/1/model.onnx'\n    print(\"object name = \" +\
+          \ object_name)\n\n    # Set up the S3 client\n    s3 = boto3.client('s3',\n\
+          \                      endpoint_url=endpoint_url,\n                    \
+          \  aws_access_key_id=aws_access_key_id,\n                      aws_secret_access_key=aws_secret_access_key)\n\
+          \n\n    # upload the model to the registry\n    s3.upload_file(input_model_path,\
+          \ bucket_name, object_name)\n\n    print(\"version output path = \" + version_file_output_path)\n\
+          \    # store the model version in a file temporarily for the next pipeline\
+          \ job\n    with open(version_file_output_path, \"w\") as text_file:\n  \
+          \      text_file.write('model_version='+model_version)\n\n"
         image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
 pipelineInfo:
-  name: 7-get-data-train-upload
+  name: 7-get-data-train-upload-deploy-versioned-data
 root:
   dag:
     tasks:
       deploy-model:
-        cachingOptions:
-          enableCache: true
+        cachingOptions: {}
         componentRef:
           name: comp-deploy-model
         dependentTasks:
         - upload-model
+        inputs:
+          artifacts:
+            input_version_file_path:
+              taskOutputArtifact:
+                outputArtifactKey: version_file_output_path
+                producerTask: upload-model
+          parameters:
+            data_connection_name:
+              runtimeValue:
+                constant: aws-connection-fraud-detection
         taskInfo:
           name: deploy-model
       get-data:
-        cachingOptions:
-          enableCache: true
+        cachingOptions: {}
         componentRef:
           name: comp-get-data
+        inputs:
+          parameters:
+            bucket_name:
+              componentInputParameter: bucket_name
+            data_version:
+              componentInputParameter: data_version
         taskInfo:
           name: get-data
       train-model:
-        cachingOptions:
-          enableCache: true
+        cachingOptions: {}
         componentRef:
           name: comp-train-model
         dependentTasks:
@@ -244,8 +321,7 @@ root:
         taskInfo:
           name: train-model
       upload-model:
-        cachingOptions:
-          enableCache: true
+        cachingOptions: {}
         componentRef:
           name: comp-upload-model
         dependentTasks:
@@ -258,6 +334,16 @@ root:
                 producerTask: train-model
         taskInfo:
           name: upload-model
+  inputDefinitions:
+    parameters:
+      bucket_name:
+        defaultValue: raw-data
+        isOptional: true
+        parameterType: STRING
+      data_version:
+        defaultValue: '1'
+        isOptional: true
+        parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.9.0
 ---
@@ -278,7 +364,21 @@ platforms:
               secretKey: AWS_S3_BUCKET
             - envVar: AWS_S3_ENDPOINT
               secretKey: AWS_S3_ENDPOINT
-            secretName: aws-connection-my-storage
+            secretName: aws-connection-fraud-detection
+        exec-get-data:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            - envVar: AWS_S3_BUCKET
+              secretKey: AWS_S3_BUCKET
+            - envVar: AWS_S3_ENDPOINT
+              secretKey: AWS_S3_ENDPOINT
+            secretName: aws-connection-fraud-detection
         exec-upload-model:
           secretAsEnv:
           - keyToEnv:
@@ -292,4 +392,4 @@ platforms:
               secretKey: AWS_S3_BUCKET
             - envVar: AWS_S3_ENDPOINT
               secretKey: AWS_S3_ENDPOINT
-            secretName: aws-connection-my-storage
+            secretName: aws-connection-fraud-detection

@@ -14,6 +14,10 @@
           "op": "execute-notebook-node",
           "app_data": {
             "component_parameters": {
+              "pipeline_parameters": [
+                "bucket_name",
+                "data_version"
+              ],
               "dependencies": [
                 "data/card_transdata.csv"
               ],
@@ -24,7 +28,13 @@
               "env_vars": [],
               "kubernetes_pod_annotations": [],
               "kubernetes_pod_labels": [],
-              "kubernetes_secrets": [],
+              "kubernetes_secrets": [
+                {
+                  "env_var": "AWS_S3_ENDPOINT",
+                  "name": "aws-connection-fraud-detection",
+                  "key": "AWS_S3_ENDPOINT"
+                }
+              ],
               "kubernetes_shared_mem_size": {},
               "kubernetes_tolerations": [],
               "mounted_volumes": [],
@@ -34,8 +44,8 @@
             "ui_data": {
               "label": "1_experiment_train.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
-              "x_pos": 138,
-              "y_pos": 350,
+              "x_pos": 126,
+              "y_pos": 344,
               "description": "Run notebook file"
             }
           },
@@ -74,9 +84,11 @@
           "op": "execute-notebook-node",
           "app_data": {
             "component_parameters": {
-              "dependencies": [
-                "models/model.onnx"
+              "pipeline_parameters": [
+                "bucket_name",
+                "data_version"
               ],
+              "dependencies": [],
               "include_subdirectories": true,
               "outputs": [
                 "vars.txt"
@@ -120,8 +132,8 @@
             "ui_data": {
               "label": "2_save_model.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
-              "x_pos": 397,
-              "y_pos": 350,
+              "x_pos": 352,
+              "y_pos": 344,
               "description": "Run notebook file"
             }
           },
@@ -167,8 +179,11 @@
           "op": "execute-notebook-node",
           "app_data": {
             "component_parameters": {
+              "pipeline_parameters": [
+                "bucket_name",
+                "data_version"
+              ],
               "dependencies": [
-                "vars.txt",
                 "deployment/serving-runtime.yaml",
                 "deployment/inference-service.yaml"
               ],
@@ -187,8 +202,8 @@
             "ui_data": {
               "label": "3_deploy_model.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
-              "x_pos": 622,
-              "y_pos": 347,
+              "x_pos": 569,
+              "y_pos": 344,
               "description": "Run notebook file"
             }
           },
@@ -246,8 +261,29 @@
             "mounted_volumes": [],
             "env_vars": [],
             "kubernetes_secrets": [],
-            "runtime_image": "quay.io/modh/runtime-images@sha256:90e394f5a379c24176b1efee6c84b83866314cafd539a66cd58544f24def84f9"
-          }
+            "runtime_image": "quay.io/modh/runtime-images@sha256:90e394f5a379c24176b1efee6c84b83866314cafd539a66cd58544f24def84f9",
+            "disable_node_caching": "True"
+          },
+          "pipeline_parameters": [
+            {
+              "name": "bucket_name",
+              "description": "Name of the bucket that holds the card data",
+              "default_value": {
+                "type": "String",
+                "value": "raw-data"
+              },
+              "required": false
+            },
+            {
+              "name": "data_version",
+              "description": "",
+              "default_value": {
+                "type": "String",
+                "value": "1"
+              },
+              "required": false
+            }
+          ]
         }
       },
       "runtime_ref": ""
