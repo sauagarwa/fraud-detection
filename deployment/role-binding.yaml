@@ -1,12 +1,15 @@
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: template-manager-rb
+  name: worldline-demo-rb
 subjects:
+  - kind: ServiceAccount
+    name: fraud-detection-wb
+    namespace: worldline
   - kind: ServiceAccount
     name: pipeline-runner-dspa
     namespace: worldline
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: template-manager-role
+  name: worldline-demo-role

@@ -1,8 +1,12 @@
 # PIPELINE DEFINITION
-# Name: 7-get-data-train-upload-deploy-versioned-data
+# Name: 7-get-data-train-upload-deploy
 # Inputs:
 #    bucket_name: str [Default: 'raw-data']
+#    canary: bool [Default: False]
 #    data_version: str [Default: '1']
+# Outputs:
+#    test-model-classification_metrics: system.ClassificationMetrics
+#    test-model-metrics: system.Metrics
 components:
   comp-deploy-model:
     executorLabel: exec-deploy-model
@@ -13,6 +17,8 @@ components:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
       parameters:
+        canary:
+          parameterType: BOOLEAN
         data_connection_name:
           parameterType: STRING
   comp-get-data:
@@ -29,6 +35,32 @@ components:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
+  comp-test-model:
+    executorLabel: exec-test-model
+    inputDefinitions:
+      artifacts:
+        input_model_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        scaler_pkl_input_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        test_data_pkl_input_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        classification_metrics:
+          artifactType:
+            schemaTitle: system.ClassificationMetrics
+            schemaVersion: 0.0.1
+        metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
   comp-train-model:
     executorLabel: exec-train-model
     inputDefinitions:
@@ -40,6 +72,14 @@ components:
     outputDefinitions:
       artifacts:
         model_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        scaler_pkl_output_path:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        test_data_pkl_output_path:
           artifactType:
             schemaTitle: system.Artifact
             schemaVersion: 0.0.1
@@ -85,14 +125,17 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef deploy_model(data_connection_name: str,\n                 input_version_file_path:\
-          \ InputPath()):\n    import os, time, subprocess\n    from jinja2 import\
-          \ Template\n    import urllib.request\n    import os\n\n    variables =\
-          \ {}\n    with open(input_version_file_path) as myfile:\n        for line\
-          \ in myfile:\n            name, var = line.partition(\"=\")[::2]\n     \
-          \       variables[name.strip()] = str(var)\n\n    template_data = {\"model_version\"\
-          : variables['model_version'], \"storage_key\": data_connection_name}\n\n\
-          \    def download_file(dir, filename):\n        url = f\"https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/{filename}\"\
+          \ *\n\ndef deploy_model(data_connection_name: str,\n                 canary:\
+          \ bool,\n                 input_version_file_path: InputPath()):\n    import\
+          \ os, time, subprocess\n    from jinja2 import Template\n    import urllib.request\n\
+          \    import os\n\n    variables = {}\n    with open(input_version_file_path)\
+          \ as myfile:\n        for line in myfile:\n            name, var = line.partition(\"\
+          =\")[::2]\n            variables[name.strip()] = str(var)\n\n    model_name\
+          \ = 'fraud' if canary==False or str(canary).lower() == 'false' else f\"\
+          fraud-{variables['model_version']}\"\n    template_data = {\"model_version\"\
+          : variables['model_version'],\n                    \"storage_key\": data_connection_name,\n\
+          \                    'model_name': model_name}\n\n    def download_file(dir,\
+          \ filename):\n        url = f\"https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/{filename}\"\
           \n\n        print(\"starting download...\")\n        urllib.request.urlretrieve(url,\
           \ f\"{dir}/{filename}\")\n        print(\"done\")\n\n        pass\n\n  \
           \  def deploy_template(filename, template_data):\n        print(\"invoking\
@@ -141,6 +184,56 @@ deploymentSpec:
           \n    print(\"starting download...\")\n    urllib.request.urlretrieve(url,\
           \ data_output_path)\n    print(\"done\")\n\n"
         image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
+    exec-test-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - test_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.9.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'onnxruntime'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef test_model(input_model_path: InputPath(),\n               test_data_pkl_input_path:\
+          \ InputPath(),\n               scaler_pkl_input_path: InputPath(),\n   \
+          \            metrics: Output[Metrics],\n               classification_metrics:\
+          \ Output[ClassificationMetrics]):\n    from sklearn.metrics import confusion_matrix,\
+          \ roc_curve\n    import numpy as np\n    import pickle\n    #import seaborn\
+          \ as sns\n    #from matplotlib import pyplot as plt\n    import onnxruntime\
+          \ as rt\n\n    with open(scaler_pkl_input_path, 'rb') as handle:\n     \
+          \   scaler = pickle.load(handle)\n    with open(test_data_pkl_input_path,\
+          \ 'rb') as handle:\n        (X_test, y_test) = pickle.load(handle)\n\n \
+          \   # Create an ONNX inference runtime session and predict values for all\
+          \ test inputs:\n    sess = rt.InferenceSession(input_model_path, providers=rt.get_available_providers())\n\
+          \    input_name = sess.get_inputs()[0].name\n    output_name = sess.get_outputs()[0].name\n\
+          \    y_pred_temp = sess.run([output_name], {input_name: scaler.transform(X_test.values).astype(np.float32)})\
+          \ \n    y_pred_temp = np.asarray(np.squeeze(y_pred_temp[0]))\n    threshold\
+          \ = 0.95\n    y_pred = np.where(y_pred_temp > threshold, 1,0)\n\n    accuracy\
+          \ = np.sum(np.asarray(y_test) == y_pred) / len(y_pred)\n    print(\"Accuracy:\
+          \ \" + str(accuracy))\n\n    c_matrix = confusion_matrix(np.asarray(y_test),y_pred)\n\
+          \n    classification_metrics.log_confusion_matrix(\n        [\"Non-Fraud\"\
+          , \"Fraud\"],\n        c_matrix.tolist(),  # .tolist() to convert np array\
+          \ to list.\n    )\n\n    # fpr, tpr, thresholds = roc_curve(y_test, y_pred)\n\
+          \    # classification_metrics.log_roc_curve(fpr,tpr,thresholds)\n\n    metrics.log_metric('accuracy',\
+          \ (accuracy*100.0))\n\n"
+        image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
     exec-train-model:
       container:
         args:
@@ -168,25 +261,27 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef train_model(data_input_path: InputPath(), model_output_path:\
-          \ OutputPath()):\n    import numpy as np\n    import pandas as pd\n    from\
-          \ keras.models import Sequential\n    from keras.layers import Dense, Dropout,\
-          \ BatchNormalization, Activation\n    from sklearn.model_selection import\
-          \ train_test_split\n    from sklearn.preprocessing import StandardScaler\n\
-          \    from sklearn.utils import class_weight\n    import tf2onnx\n    import\
-          \ onnx\n    import pickle\n    from pathlib import Path\n\n    # Load the\
-          \ CSV data which we will use to train the model.\n    # It contains the\
-          \ following fields:\n    #   distancefromhome - The distance from home where\
-          \ the transaction happened.\n    #   distancefromlast_transaction - The\
-          \ distance from last transaction happened.\n    #   ratiotomedianpurchaseprice\
-          \ - Ratio of purchased price compared to median purchase price.\n    # \
-          \  repeat_retailer - If it's from a retailer that already has been purchased\
-          \ from before.\n    #   used_chip - If the (credit card) chip was used.\n\
-          \    #   usedpinnumber - If the PIN number was used.\n    #   online_order\
-          \ - If it was an online order.\n    #   fraud - If the transaction is fraudulent.\n\
-          \    Data = pd.read_csv(data_input_path)\n\n    # Set the input (X) and\
-          \ output (Y) data.\n    # The only output data we have is if it's fraudulent\
-          \ or not, and all other fields go as inputs to the model.\n\n    X = Data.drop(columns\
+          \ *\n\ndef train_model(data_input_path: InputPath(), \n                test_data_pkl_output_path:\
+          \ OutputPath(),\n                scaler_pkl_output_path: OutputPath(),\n\
+          \                model_output_path: OutputPath()):\n    import numpy as\
+          \ np\n    import pandas as pd\n    from keras.models import Sequential\n\
+          \    from keras.layers import Dense, Dropout, BatchNormalization, Activation\n\
+          \    from sklearn.model_selection import train_test_split, cross_val_predict\n\
+          \    from sklearn.preprocessing import StandardScaler\n    from sklearn.utils\
+          \ import class_weight\n    import tf2onnx\n    import onnx\n    import pickle\n\
+          \    from pathlib import Path\n\n    # Load the CSV data which we will use\
+          \ to train the model.\n    # It contains the following fields:\n    #  \
+          \ distancefromhome - The distance from home where the transaction happened.\n\
+          \    #   distancefromlast_transaction - The distance from last transaction\
+          \ happened.\n    #   ratiotomedianpurchaseprice - Ratio of purchased price\
+          \ compared to median purchase price.\n    #   repeat_retailer - If it's\
+          \ from a retailer that already has been purchased from before.\n    #  \
+          \ used_chip - If the (credit card) chip was used.\n    #   usedpinnumber\
+          \ - If the PIN number was used.\n    #   online_order - If it was an online\
+          \ order.\n    #   fraud - If the transaction is fraudulent.\n    Data =\
+          \ pd.read_csv(data_input_path)\n\n    # Set the input (X) and output (Y)\
+          \ data.\n    # The only output data we have is if it's fraudulent or not,\
+          \ and all other fields go as inputs to the model.\n\n    X = Data.drop(columns\
           \ = ['repeat_retailer','distance_from_home', 'fraud'])\n    y = Data['fraud']\n\
           \n    # Split the data into training and testing sets so we have something\
           \ to test the trained model with.\n\n    # X_train, X_test, y_train, y_test\
@@ -200,10 +295,10 @@ deploymentSpec:
           \ to the training data, otherwise you are leaking information about the\
           \ global distribution of variables (which is influenced by the test set)\
           \ into the training set.\n\n    scaler = StandardScaler()\n\n    X_train\
-          \ = scaler.fit_transform(X_train.values)\n\n    Path(\"artifact\").mkdir(parents=True,\
-          \ exist_ok=True)\n    with open(\"artifact/test_data.pkl\", \"wb\") as handle:\n\
-          \        pickle.dump((X_test, y_test), handle)\n    with open(\"artifact/scaler.pkl\"\
-          , \"wb\") as handle:\n        pickle.dump(scaler, handle)\n\n    # Since\
+          \ = scaler.fit_transform(X_train.values)\n\n    #Path(\"artifact\").mkdir(parents=True,\
+          \ exist_ok=True)\n    with open(test_data_pkl_output_path, \"wb\") as handle:\n\
+          \        pickle.dump((X_test, y_test), handle)\n    with open(scaler_pkl_output_path,\
+          \ \"wb\") as handle:\n        pickle.dump(scaler, handle)\n\n    # Since\
           \ the dataset is unbalanced (it has many more non-fraud transactions than\
           \ fraudulent ones), we set a class weight to weight the few fraudulent transactions\
           \ higher than the many non-fraud transactions.\n\n    class_weights = class_weight.compute_class_weight('balanced',classes\
@@ -272,9 +367,19 @@ deploymentSpec:
           \      text_file.write('model_version='+model_version)\n\n"
         image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301
 pipelineInfo:
-  name: 7-get-data-train-upload-deploy-versioned-data
+  name: 7-get-data-train-upload-deploy
 root:
   dag:
+    outputs:
+      artifacts:
+        test-model-classification_metrics:
+          artifactSelectors:
+          - outputArtifactKey: classification_metrics
+            producerSubtask: test-model
+        test-model-metrics:
+          artifactSelectors:
+          - outputArtifactKey: metrics
+            producerSubtask: test-model
     tasks:
       deploy-model:
         cachingOptions: {}
@@ -289,6 +394,8 @@ root:
                 outputArtifactKey: version_file_output_path
                 producerTask: upload-model
           parameters:
+            canary:
+              componentInputParameter: canary
             data_connection_name:
               runtimeValue:
                 constant: aws-connection-fraud-detection
@@ -306,6 +413,28 @@ root:
               componentInputParameter: data_version
         taskInfo:
           name: get-data
+      test-model:
+        cachingOptions: {}
+        componentRef:
+          name: comp-test-model
+        dependentTasks:
+        - train-model
+        inputs:
+          artifacts:
+            input_model_path:
+              taskOutputArtifact:
+                outputArtifactKey: model_output_path
+                producerTask: train-model
+            scaler_pkl_input_path:
+              taskOutputArtifact:
+                outputArtifactKey: scaler_pkl_output_path
+                producerTask: train-model
+            test_data_pkl_input_path:
+              taskOutputArtifact:
+                outputArtifactKey: test_data_pkl_output_path
+                producerTask: train-model
+        taskInfo:
+          name: test-model
       train-model:
         cachingOptions: {}
         componentRef:
@@ -325,6 +454,7 @@ root:
         componentRef:
           name: comp-upload-model
         dependentTasks:
+        - test-model
         - train-model
         inputs:
           artifacts:
@@ -340,10 +470,24 @@ root:
         defaultValue: raw-data
         isOptional: true
         parameterType: STRING
+      canary:
+        defaultValue: false
+        isOptional: true
+        parameterType: BOOLEAN
       data_version:
         defaultValue: '1'
         isOptional: true
         parameterType: STRING
+  outputDefinitions:
+    artifacts:
+      test-model-classification_metrics:
+        artifactType:
+          schemaTitle: system.ClassificationMetrics
+          schemaVersion: 0.0.1
+      test-model-metrics:
+        artifactType:
+          schemaTitle: system.Metrics
+          schemaVersion: 0.0.1
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.9.0
 ---

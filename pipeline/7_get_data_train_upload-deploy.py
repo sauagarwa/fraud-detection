@@ -2,7 +2,8 @@ import os
 
 from kfp import compiler
 from kfp import dsl
-from kfp.dsl import InputPath, OutputPath
+from kfp.dsl import ClassificationMetrics, Dataset, Input, Model, Output, InputPath, OutputPath, Metrics
+
 
 from kfp import kubernetes
 from typing import Optional
@@ -31,12 +32,15 @@ def get_data(data_version: str,
     base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301",
     packages_to_install=["tf2onnx", "seaborn"],
 )
-def train_model(data_input_path: InputPath(), model_output_path: OutputPath()):
+def train_model(data_input_path: InputPath(), 
+                test_data_pkl_output_path: OutputPath(),
+                scaler_pkl_output_path: OutputPath(),
+                model_output_path: OutputPath()):
     import numpy as np
     import pandas as pd
     from keras.models import Sequential
     from keras.layers import Dense, Dropout, BatchNormalization, Activation
-    from sklearn.model_selection import train_test_split
+    from sklearn.model_selection import train_test_split, cross_val_predict
     from sklearn.preprocessing import StandardScaler
     from sklearn.utils import class_weight
     import tf2onnx
@@ -76,10 +80,10 @@ def train_model(data_input_path: InputPath(), model_output_path: OutputPath()):
 
     X_train = scaler.fit_transform(X_train.values)
 
-    Path("artifact").mkdir(parents=True, exist_ok=True)
-    with open("artifact/test_data.pkl", "wb") as handle:
+    #Path("artifact").mkdir(parents=True, exist_ok=True)
+    with open(test_data_pkl_output_path, "wb") as handle:
         pickle.dump((X_test, y_test), handle)
-    with open("artifact/scaler.pkl", "wb") as handle:
+    with open(scaler_pkl_output_path, "wb") as handle:
         pickle.dump(scaler, handle)
 
     # Since the dataset is unbalanced (it has many more non-fraud transactions than fraudulent ones), we set a class weight to weight the few fraudulent transactions higher than the many non-fraud transactions.
@@ -160,6 +164,49 @@ def upload_model(input_model_path: InputPath(), version_file_output_path: Output
         text_file.write('model_version='+model_version)
 
 
+@dsl.component(base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301",
+               packages_to_install=["onnxruntime"])
+def test_model(input_model_path: InputPath(),
+               test_data_pkl_input_path: InputPath(),
+               scaler_pkl_input_path: InputPath(),
+               metrics: Output[Metrics],
+               classification_metrics: Output[ClassificationMetrics]):
+    from sklearn.metrics import confusion_matrix, roc_curve
+    import numpy as np
+    import pickle
+    #import seaborn as sns
+    #from matplotlib import pyplot as plt
+    import onnxruntime as rt
+
+    with open(scaler_pkl_input_path, 'rb') as handle:
+        scaler = pickle.load(handle)
+    with open(test_data_pkl_input_path, 'rb') as handle:
+        (X_test, y_test) = pickle.load(handle)
+
+    # Create an ONNX inference runtime session and predict values for all test inputs:
+    sess = rt.InferenceSession(input_model_path, providers=rt.get_available_providers())
+    input_name = sess.get_inputs()[0].name
+    output_name = sess.get_outputs()[0].name
+    y_pred_temp = sess.run([output_name], {input_name: scaler.transform(X_test.values).astype(np.float32)}) 
+    y_pred_temp = np.asarray(np.squeeze(y_pred_temp[0]))
+    threshold = 0.95
+    y_pred = np.where(y_pred_temp > threshold, 1,0)
+
+    accuracy = np.sum(np.asarray(y_test) == y_pred) / len(y_pred)
+    print("Accuracy: " + str(accuracy))
+
+    c_matrix = confusion_matrix(np.asarray(y_test),y_pred)
+    
+    classification_metrics.log_confusion_matrix(
+        ["Non-Fraud", "Fraud"],
+        c_matrix.tolist(),  # .tolist() to convert np array to list.
+    )
+    
+    # fpr, tpr, thresholds = roc_curve(y_test, y_pred)
+    # classification_metrics.log_roc_curve(fpr,tpr,thresholds)
+
+    metrics.log_metric('accuracy', (accuracy*100.0))
+
 # @dsl.container_component
 # def deploy_model():
 #     return dsl.ContainerSpec(
@@ -179,8 +226,10 @@ def upload_model(input_model_path: InputPath(), version_file_output_path: Output
 #         ],
 #     )
 
+
 @dsl.component(base_image="quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023b-20240301")
 def deploy_model(data_connection_name: str,
+                 canary: bool,
                  input_version_file_path: InputPath()):
     import os, time, subprocess
     from jinja2 import Template
@@ -193,7 +242,10 @@ def deploy_model(data_connection_name: str,
             name, var = line.partition("=")[::2]
             variables[name.strip()] = str(var)
 
-    template_data = {"model_version": variables['model_version'], "storage_key": data_connection_name}
+    model_name = 'fraud' if canary==False or str(canary).lower() == 'false' else f"fraud-{variables['model_version']}"
+    template_data = {"model_version": variables['model_version'],
+                    "storage_key": data_connection_name,
+                    'model_name': model_name}
 
     def download_file(dir, filename):
         url = f"https://raw.githubusercontent.com/sauagarwa/fraud-detection/main/deployment/{filename}"
@@ -226,7 +278,8 @@ def deploy_model(data_connection_name: str,
 
 @dsl.pipeline(name=os.path.basename(__file__).replace('.py', ''))
 def pipeline(data_version: str = '1',
-             bucket_name: str = 'raw-data'):
+             bucket_name: str = 'raw-data',
+             canary: bool = False):
     
     secret_key_to_env={
             'AWS_ACCESS_KEY_ID': 'AWS_ACCESS_KEY_ID',
@@ -246,8 +299,17 @@ def pipeline(data_version: str = '1',
     train_model_task = train_model(data_input_path=csv_file)
     train_model_task.set_caching_options(False)
     onnx_file = train_model_task.outputs["model_output_path"]
+    test_data_pkl_file = train_model_task.outputs["test_data_pkl_output_path"]
+    scaler_pkl_file = train_model_task.outputs["scaler_pkl_output_path"]
 
-    upload_model_task = upload_model(input_model_path=onnx_file)
+    # test model file
+    test_model_task = test_model(input_model_path=onnx_file,
+                                 test_data_pkl_input_path=test_data_pkl_file,
+                                 scaler_pkl_input_path=scaler_pkl_file)
+    test_model_task.set_caching_options(False)
+
+    # upload model to s3 bucket
+    upload_model_task = upload_model(input_model_path=onnx_file).after(test_model_task)
     upload_model_task.set_caching_options(False)
     #upload_model_task.set_env_variable(name="S3_KEY", value="models/fraud/1/model.onnx")
     kubernetes.use_secret_as_env(
@@ -256,7 +318,9 @@ def pipeline(data_version: str = '1',
         secret_key_to_env=secret_key_to_env)
     version_file = upload_model_task.outputs["version_file_output_path"]
 
+    # deploy model
     deploy_model_task = deploy_model(data_connection_name="aws-connection-fraud-detection",
+                                     canary=canary,
                                      input_version_file_path=version_file).after(upload_model_task)
     deploy_model_task.set_caching_options(False)
     kubernetes.use_secret_as_env(

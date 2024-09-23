@@ -16,7 +16,8 @@
             "component_parameters": {
               "pipeline_parameters": [
                 "bucket_name",
-                "data_version"
+                "data_version",
+                "canary"
               ],
               "dependencies": [
                 "data/card_transdata.csv"
@@ -45,7 +46,7 @@
               "label": "1_experiment_train.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
               "x_pos": 126,
-              "y_pos": 344,
+              "y_pos": 342,
               "description": "Run notebook file"
             }
           },
@@ -86,7 +87,8 @@
             "component_parameters": {
               "pipeline_parameters": [
                 "bucket_name",
-                "data_version"
+                "data_version",
+                "canary"
               ],
               "dependencies": [],
               "include_subdirectories": true,
@@ -133,7 +135,7 @@
               "label": "2_save_model.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
               "x_pos": 352,
-              "y_pos": 344,
+              "y_pos": 342,
               "description": "Run notebook file"
             }
           },
@@ -181,7 +183,8 @@
             "component_parameters": {
               "pipeline_parameters": [
                 "bucket_name",
-                "data_version"
+                "data_version",
+                "canary"
               ],
               "dependencies": [
                 "deployment/serving-runtime.yaml",
@@ -203,7 +206,7 @@
               "label": "3_deploy_model.ipynb",
               "image": "/notebook/worldline/fraud-detection-wb/static/elyra/notebook.svg",
               "x_pos": 569,
-              "y_pos": 344,
+              "y_pos": 341,
               "description": "Run notebook file"
             }
           },
@@ -272,14 +275,23 @@
                 "type": "String",
                 "value": "raw-data"
               },
-              "required": false
+              "required": true
             },
             {
               "name": "data_version",
-              "description": "",
+              "description": "Version of data",
               "default_value": {
                 "type": "String",
                 "value": "1"
+              },
+              "required": true
+            },
+            {
+              "name": "canary",
+              "description": "Is Canary deployment?",
+              "default_value": {
+                "type": "Bool",
+                "value": false
               },
               "required": false
             }
